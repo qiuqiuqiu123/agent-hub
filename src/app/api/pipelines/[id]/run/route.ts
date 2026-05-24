@@ -28,26 +28,25 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
     if (agent?.workDir) workDir = agent.workDir
   }
 
-  // 允许请求体覆盖工作目录
+  // 解析请求体：workDir 覆盖 + input 参数
+  let input: Record<string, string> | undefined
   try {
     const body = await req.json()
     if (body.workDir) workDir = body.workDir
+    if (body.input) input = body.input
   } catch {
     // 空 body 没关系
   }
 
-  // 异步执行 pipeline（不阻塞响应）
+  // 异步执行 pipeline
   const runPromise = runPipeline({
     pipelineId: id,
     pipelineName: pipeline.name,
     config,
     workDir,
+    input,
   })
-
-  // 等待 runId 生成后返回（runner 内部第一步就创建了 run 记录）
-  // 由于 runPipeline 是 async，我们等它完成以获取 runId
-  // 但为了不阻塞 HTTP 响应，我们用 fire-and-forget + 查询最新 run
-  runPromise.catch(() => {}) // 防止 unhandled rejection
+  runPromise.catch(() => {})
 
   // 短暂等待让 run 记录创建
   await new Promise(resolve => setTimeout(resolve, 100))

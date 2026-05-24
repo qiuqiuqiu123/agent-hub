@@ -6,11 +6,13 @@ export const agents = sqliteTable('agents', {
   role: text('role').notNull(),
   personality: text('personality').notNull(),
   systemPrompt: text('system_prompt').notNull().default(''),
+  type: text('type', { enum: ['ai', 'tool'] }).notNull().default('ai'),
   provider: text('provider').notNull().default('claude'),
   apiKey: text('api_key').notNull().default(''),
   baseUrl: text('base_url').notNull().default(''),
   modelId: text('model_id').notNull().default(''),
   workDir: text('work_dir').notNull().default(''),
+  config: text('config').notNull().default('{}'), // Tool Agent 配置 JSON
   createdAt: integer('created_at', { mode: 'timestamp' }).notNull().$defaultFn(() => new Date()),
   updatedAt: integer('updated_at', { mode: 'timestamp' }).notNull().$defaultFn(() => new Date()),
 })
@@ -113,3 +115,36 @@ export type Pipeline = typeof pipelines.$inferSelect
 export type NewPipeline = typeof pipelines.$inferInsert
 export type PipelineRun = typeof pipelineRuns.$inferSelect
 export type PipelineStepRun = typeof pipelineStepRuns.$inferSelect
+
+// 定时任务表
+
+export const schedules = sqliteTable('schedules', {
+  id: text('id').primaryKey(),
+  pipelineId: text('pipeline_id').notNull().references(() => pipelines.id, { onDelete: 'cascade' }),
+  name: text('name').notNull(),
+  cron: text('cron').notNull(),
+  input: text('input').notNull().default('{}'), // JSON: Pipeline input 参数
+  enabled: integer('enabled', { mode: 'boolean' }).notNull().default(true),
+  lastRunAt: integer('last_run_at', { mode: 'timestamp' }),
+  nextRunAt: integer('next_run_at', { mode: 'timestamp' }),
+  createdAt: integer('created_at', { mode: 'timestamp' }).notNull().$defaultFn(() => new Date()),
+  updatedAt: integer('updated_at', { mode: 'timestamp' }).notNull().$defaultFn(() => new Date()),
+})
+
+// Webhook 表
+
+export const webhooks = sqliteTable('webhooks', {
+  id: text('id').primaryKey(),
+  name: text('name').notNull(),
+  pipelineId: text('pipeline_id').notNull().references(() => pipelines.id, { onDelete: 'cascade' }),
+  matchRules: text('match_rules').notNull().default('{}'), // JSON: 字段等值匹配规则
+  extractInput: text('extract_input').notNull().default('{}'), // JSON: payload 字段 -> pipeline input 映射
+  enabled: integer('enabled', { mode: 'boolean' }).notNull().default(true),
+  createdAt: integer('created_at', { mode: 'timestamp' }).notNull().$defaultFn(() => new Date()),
+  updatedAt: integer('updated_at', { mode: 'timestamp' }).notNull().$defaultFn(() => new Date()),
+})
+
+export type Schedule = typeof schedules.$inferSelect
+export type NewSchedule = typeof schedules.$inferInsert
+export type Webhook = typeof webhooks.$inferSelect
+export type NewWebhook = typeof webhooks.$inferInsert

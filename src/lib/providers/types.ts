@@ -1,3 +1,5 @@
+// === AI Agent Provider (CLI spawn) ===
+
 export interface AgentProvider {
   readonly name: string
   buildCommand(options: CommandOptions): CommandResult
@@ -29,3 +31,16 @@ export type ProviderEvent =
   | { type: 'error'; message: string }
   | { type: 'session_id'; id: string }
   | { type: 'usage'; inputTokens: number; outputTokens: number }
+
+// === Tool Agent Provider (确定性程序调用) ===
+
+export interface ToolProvider {
+  readonly name: string
+  execute(input: Record<string, string>, config: Record<string, string>): Promise<ToolResult>
+}
+
+export interface ToolResult {
+  success: boolean
+  output: string
+  error?: string
+}

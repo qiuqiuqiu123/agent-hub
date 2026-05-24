@@ -3,13 +3,13 @@ import { db } from '@/db'
 import { agents, pipelineRuns, pipelineStepRuns, skills, agentSkills } from '@/db/schema'
 import { eq } from 'drizzle-orm'
 import { generateId } from '@/lib/constants'
-import { getProvider } from '@/lib/providers'
+import { getProvider, getToolProvider } from '@/lib/providers'
 import type { ProviderEvent } from '@/lib/providers'
 import { resolvePrompt } from './prompt-template'
-import { createRunBranch, collectCommits, mergeBack, cleanupBranch, isGitRepo } from './git-strategy'
-import type { PipelineConfig, PipelineStep, SingleStep, StepResult, OutputExtraction } from './types'
+import { createRunBranch, mergeBack, cleanupBranch, isGitRepo } from './git-strategy'
+import type { PipelineConfig, PipelineStep, SingleStep, ConditionStep, StepResult, OutputExtraction } from './types'
 
-const IDLE_TIMEOUT_MS = 10 * 60 * 1000 // 10 分钟
+const IDLE_TIMEOUT_MS = 10 * 60 * 1000
 const DEFAULT_COMPLETION_SIGNAL = '<done>COMPLETE</done>'
 
 export interface RunPipelineOptions {
@@ -17,19 +17,19 @@ export interface RunPipelineOptions {
   pipelineName: string
   config: PipelineConfig
   workDir: string
+  input?: Record<string, string>  // 外部注入的 input 参数
   signal?: AbortSignal
   onStepStart?: (stepId: string) => void
   onStepComplete?: (stepId: string, result: StepResult) => void
 }
 
 export async function runPipeline(options: RunPipelineOptions): Promise<string> {
-  const { pipelineId, pipelineName, config, workDir, signal, onStepStart, onStepComplete } = options
+  const { pipelineId, pipelineName, config, workDir, input, signal, onStepStart, onStepComplete } = options
 
   const runId = generateId()
   let branch: string | null = null
   let baseSha: string | null = null
 
-  // Git 分支策略
   if (config.git.enabled && isGitRepo(workDir)) {
     const branchInfo = createRunBranch(workDir, pipelineName, config.git.baseBranch)
     branch = branchInfo.branch
@@ -49,14 +49,47 @@ export async function runPipeline(options: RunPipelineOptions): Promise<string> 
     const results = new Map<string, StepResult>()
     const sortedSteps = topologicalSort(config.steps)
 
+    // 合并 pipeline input 默认值和外部注入
+    const pipelineInput: Record<string, string> = {}
+    if (config.input) {
+      for (const [key, param] of Object.entries(config.input)) {
+        if (param.default !== undefined) pipelineInput[key] = param.default
+      }
+    }
+    if (input) {
+      Object.assign(pipelineInput, input)
+    }
+
+    // 跟踪 condition 激活的 step
+    const activatedByCondition = new Set<string>()
+    // 所有被 condition 管理的 step（初始不激活）
+    const conditionManagedSteps = new Set<string>()
+    for (const step of config.steps) {
+      if (step.type === 'condition') {
+        for (const targets of Object.values(step.branches)) {
+          targets.forEach(id => conditionManagedSteps.add(id))
+        }
+      }
+    }
+
     for (const step of sortedSteps) {
       if (signal?.aborted) {
         throw new Error('Pipeline cancelled')
       }
 
+      // condition 管理的 step 未被激活则跳过
+      if (conditionManagedSteps.has(step.id) && !activatedByCondition.has(step.id)) {
+        const skipResult: StepResult = { stepId: step.id, status: 'skipped', output: '', commits: [] }
+        results.set(step.id, skipResult)
+        continue
+      }
+
       // 检查依赖
       const deps = step.dependsOn || []
-      const depsOk = deps.every(d => results.get(d)?.status === 'completed')
+      const depsOk = deps.every(d => {
+        const r = results.get(d)
+        return r?.status === 'completed' || r?.status === 'skipped'
+      })
       if (!depsOk) {
         const skipResult: StepResult = { stepId: step.id, status: 'skipped', output: '', commits: [] }
         results.set(step.id, skipResult)
@@ -65,9 +98,17 @@ export async function runPipeline(options: RunPipelineOptions): Promise<string> 
 
       onStepStart?.(step.id)
 
-      if (step.type === 'parallel') {
+      if (step.type === 'condition') {
+        const condResult = executeCondition(step, results, pipelineInput)
+        results.set(step.id, condResult)
+        // 激活匹配的分支 step
+        if (condResult.structuredOutput && Array.isArray(condResult.structuredOutput)) {
+          (condResult.structuredOutput as string[]).forEach(id => activatedByCondition.add(id))
+        }
+        onStepComplete?.(step.id, condResult)
+      } else if (step.type === 'parallel') {
         const subResults = await Promise.allSettled(
-          step.steps.map(sub => executeStep(runId, { ...sub, type: 'single', dependsOn: [] }, workDir, results, signal))
+          step.steps.map(sub => executeStep(runId, { ...sub, type: 'single', dependsOn: [] }, workDir, results, pipelineInput, signal))
         )
         for (let i = 0; i < subResults.length; i++) {
           const sub = step.steps[i]
@@ -86,13 +127,17 @@ export async function runPipeline(options: RunPipelineOptions): Promise<string> 
           commits: step.steps.flatMap(s => results.get(s.id)?.commits || []),
         })
       } else {
-        const result = await executeStep(runId, step, workDir, results, signal)
+        const result = await executeStepWithRetry(runId, step, workDir, results, pipelineInput, signal)
         results.set(step.id, result)
         onStepComplete?.(step.id, result)
+
+        // 失败策略：stop 时中断整个 pipeline
+        if (result.status === 'failed' && (step.onFailure || 'stop') === 'stop') {
+          throw new Error(`Step ${step.id} failed: ${result.error || 'unknown'}`)
+        }
       }
     }
 
-    // 收集 commits 并处理合并
     const hasFailure = Array.from(results.values()).some(r => r.status === 'failed')
 
     if (config.git.enabled && branch && baseSha && !hasFailure && config.git.autoMerge) {
@@ -101,10 +146,7 @@ export async function runPipeline(options: RunPipelineOptions): Promise<string> 
     }
 
     await db.update(pipelineRuns)
-      .set({
-        status: hasFailure ? 'failed' : 'completed',
-        completedAt: new Date(),
-      })
+      .set({ status: hasFailure ? 'failed' : 'completed', completedAt: new Date() })
       .where(eq(pipelineRuns.id, runId))
 
     return runId
@@ -117,34 +159,175 @@ export async function runPipeline(options: RunPipelineOptions): Promise<string> 
   }
 }
 
+// --- Condition 路由 ---
+
+function executeCondition(
+  step: ConditionStep,
+  results: Map<string, StepResult>,
+  pipelineInput: Record<string, string>,
+): StepResult {
+  // 构建 args 用于解析 input 模板
+  const args = buildTemplateArgs(results, pipelineInput, '')
+  const resolved = resolvePrompt(step.input, args)
+
+  let fieldValue: string
+  try {
+    const parsed = JSON.parse(resolved)
+    fieldValue = String(parsed[step.field] ?? '')
+  } catch {
+    fieldValue = resolved
+  }
+
+  const activatedSteps = step.branches[fieldValue] || []
+  return {
+    stepId: step.id,
+    status: 'completed',
+    output: `route: ${fieldValue} -> [${activatedSteps.join(', ')}]`,
+    structuredOutput: activatedSteps,
+    commits: [],
+  }
+}
+
+// --- 带重试的 step 执行 ---
+
+async function executeStepWithRetry(
+  runId: string,
+  step: SingleStep,
+  workDir: string,
+  results: Map<string, StepResult>,
+  pipelineInput: Record<string, string>,
+  signal?: AbortSignal,
+): Promise<StepResult> {
+  const maxRetries = step.onFailure === 'retry' ? (step.maxRetries ?? 2) : 0
+  let lastResult: StepResult | undefined
+
+  for (let attempt = 0; attempt <= maxRetries; attempt++) {
+    lastResult = await executeStep(runId, step, workDir, results, pipelineInput, signal)
+    if (lastResult.status === 'completed') return lastResult
+    if (signal?.aborted) return lastResult
+  }
+
+  // skip 策略：标记为 skipped 而非 failed
+  if (step.onFailure === 'skip' && lastResult) {
+    return { ...lastResult, status: 'skipped' }
+  }
+  return lastResult!
+}
+
+// --- 构建模板参数 ---
+
+function buildTemplateArgs(
+  results: Map<string, StepResult>,
+  pipelineInput: Record<string, string>,
+  workDir: string,
+): Record<string, string> {
+  const args: Record<string, string> = { ...pipelineInput }
+  if (workDir) args.WORK_DIR = workDir
+  for (const [id, result] of results) {
+    args[`STEP_${id.toUpperCase()}_OUTPUT`] = result.output || ''
+    if (result.structuredOutput) {
+      args[`STEP_${id.toUpperCase()}_DATA`] = JSON.stringify(result.structuredOutput)
+    }
+  }
+  return args
+}
+
+// --- Step 执行（AI / Tool 分流）---
+
 async function executeStep(
   runId: string,
   step: SingleStep,
   workDir: string,
   previousResults: Map<string, StepResult>,
+  pipelineInput: Record<string, string>,
   signal?: AbortSignal,
 ): Promise<StepResult> {
   const stepRunId = generateId()
 
-  // 获取 agent
   const [agent] = await db.select().from(agents).where(eq(agents.id, step.agentId))
   if (!agent) {
     return { stepId: step.id, status: 'failed', output: '', commits: [], error: `Agent ${step.agentId} not found` }
   }
 
-  // 构建 prompt args
-  const args: Record<string, string> = { ...step.promptArgs }
-  args.WORK_DIR = workDir
-  for (const [id, result] of previousResults) {
-    args[`STEP_${id.toUpperCase()}_OUTPUT`] = result.output || ''
-    // 注入 structured output
-    if (result.structuredOutput) {
-      args[`STEP_${id.toUpperCase()}_DATA`] = JSON.stringify(result.structuredOutput)
-    }
-  }
+  const args = buildTemplateArgs(previousResults, pipelineInput, workDir)
+  if (step.promptArgs) Object.assign(args, step.promptArgs)
 
   const resolvedPrompt = resolvePrompt(step.prompt, args)
 
+  await db.insert(pipelineStepRuns).values({
+    id: stepRunId,
+    runId,
+    stepId: step.id,
+    agentId: agent.id,
+    status: 'running',
+    prompt: resolvedPrompt,
+    startedAt: new Date(),
+  })
+
+  // Tool Agent 分流
+  if (agent.type === 'tool') {
+    return executeToolStep(stepRunId, step, agent, resolvedPrompt, args)
+  }
+
+  // AI Agent 执行
+  return executeAIStep(stepRunId, step, agent, resolvedPrompt, workDir, previousResults, signal)
+}
+
+// --- Tool Agent 执行 ---
+
+async function executeToolStep(
+  stepRunId: string,
+  step: SingleStep,
+  agent: typeof agents.$inferSelect,
+  resolvedPrompt: string,
+  args: Record<string, string>,
+): Promise<StepResult> {
+  try {
+    const toolProvider = getToolProvider(agent.provider)
+    const agentConfig: Record<string, string> = JSON.parse(agent.config || '{}')
+    // Tool Agent 的 input = promptArgs 合并 resolved prompt
+    const toolInput: Record<string, string> = { ...args, PROMPT: resolvedPrompt }
+    const result = await toolProvider.execute(toolInput, agentConfig)
+
+    const status = result.success ? 'completed' : 'failed'
+    await db.update(pipelineStepRuns)
+      .set({ status, output: result.output, error: result.error, completedAt: new Date() })
+      .where(eq(pipelineStepRuns.id, stepRunId))
+
+    // Tool Agent output 如果是 JSON，自动设为 structuredOutput
+    let structuredOutput: unknown
+    if (result.output) {
+      try { structuredOutput = JSON.parse(result.output) } catch {}
+    }
+
+    return {
+      stepId: step.id,
+      status: status as 'completed' | 'failed',
+      output: result.output,
+      structuredOutput,
+      commits: [],
+      error: result.error,
+    }
+  } catch (err) {
+    const error = err instanceof Error ? err.message : String(err)
+    await db.update(pipelineStepRuns)
+      .set({ status: 'failed', error, completedAt: new Date() })
+      .where(eq(pipelineStepRuns.id, stepRunId))
+    return { stepId: step.id, status: 'failed', output: '', commits: [], error }
+  }
+}
+
+// --- AI Agent 执行 ---
+
+async function executeAIStep(
+  stepRunId: string,
+  step: SingleStep,
+  agent: typeof agents.$inferSelect,
+  resolvedPrompt: string,
+  workDir: string,
+  previousResults: Map<string, StepResult>,
+  signal?: AbortSignal,
+): Promise<StepResult> {
   // 获取 agent skills
   const agentSkillRows = await db
     .select({ skill: skills })
@@ -158,25 +341,19 @@ async function executeStep(
 
   const systemPrompt = `你是 ${agent.name}。角色: ${agent.role}。性格: ${agent.personality}。${agent.systemPrompt || ''}${skillsContext}`
 
-  // Session 恢复：从前序 step 获取 sessionId
+  // Output schema 注入：追加格式约束到 prompt 末尾
+  let finalPrompt = resolvedPrompt
+  if (step.output?.schema) {
+    const schemaDesc = JSON.stringify(step.output.schema, null, 2)
+    finalPrompt += `\n\n请将最终结果以如下 XML 格式输出：\n<${step.output.tag}>${schemaDesc}</${step.output.tag}>`
+  }
+
+  // Session 恢复
   let sessionId: string | undefined
   if (step.resumeFrom) {
     const prevResult = previousResults.get(step.resumeFrom)
-    if (prevResult?.sessionId) {
-      sessionId = prevResult.sessionId
-    }
+    if (prevResult?.sessionId) sessionId = prevResult.sessionId
   }
-
-  // 记录 step run
-  await db.insert(pipelineStepRuns).values({
-    id: stepRunId,
-    runId,
-    stepId: step.id,
-    agentId: agent.id,
-    status: 'running',
-    prompt: resolvedPrompt,
-    startedAt: new Date(),
-  })
 
   // Multi-iteration 循环
   const maxIterations = step.maxIterations || 1
@@ -186,27 +363,13 @@ async function executeStep(
   let iterations = 0
 
   for (let i = 0; i < maxIterations; i++) {
-    if (signal?.aborted) {
-      break
-    }
+    if (signal?.aborted) break
     iterations++
 
-    const iterResult = await executeOnce(agent, resolvedPrompt, systemPrompt, workDir, currentSessionId, completionSignal, signal)
-
+    const iterResult = await executeOnce(agent, finalPrompt, systemPrompt, workDir, currentSessionId, completionSignal, signal)
     totalOutput += iterResult.output
-    if (iterResult.sessionId) {
-      currentSessionId = iterResult.sessionId
-    }
-
-    // 检查完成信号
-    if (iterResult.completed || iterResult.status === 'failed') {
-      break
-    }
-
-    // 非最后一轮，继续迭代（prompt 可以包含"继续"指令）
-    if (i < maxIterations - 1) {
-      // 后续迭代使用 session 恢复，prompt 简化为"继续"
-    }
+    if (iterResult.sessionId) currentSessionId = iterResult.sessionId
+    if (iterResult.completed || iterResult.status === 'failed') break
   }
 
   // Structured Output 提取
@@ -234,10 +397,12 @@ async function executeStep(
   }
 }
 
+// --- CLI spawn 执行单次 ---
+
 interface IterationResult {
   output: string
   sessionId?: string
-  completed: boolean  // 是否检测到完成信号
+  completed: boolean
   status: 'completed' | 'failed'
 }
 
@@ -284,7 +449,6 @@ async function executeOnce(
       finish('failed')
     }
     signal?.addEventListener('abort', abortHandler, { once: true })
-
     resetIdle()
 
     let buffer = ''
@@ -293,12 +457,9 @@ async function executeOnce(
       buffer += data.toString()
       const lines = buffer.split('\n')
       buffer = lines.pop() || ''
-
       for (const line of lines) {
         const events = provider.parseOutputLine(line)
-        for (const evt of events) {
-          handleEvent(evt)
-        }
+        for (const evt of events) handleEvent(evt)
       }
     })
 
@@ -309,10 +470,7 @@ async function executeOnce(
         case 'text':
         case 'result':
           output += evt.content
-          // 检查完成信号
-          if (output.includes(completionSignal)) {
-            completed = true
-          }
+          if (output.includes(completionSignal)) completed = true
           break
         case 'session_id':
           capturedSessionId = evt.id
@@ -332,7 +490,7 @@ async function executeOnce(
     proc.on('close', (code) => {
       if (buffer.trim()) {
         const events = provider.parseOutputLine(buffer)
-        for (const evt of events) { handleEvent(evt) }
+        for (const evt of events) handleEvent(evt)
       }
       finish(code === 0 ? 'completed' : 'failed')
     })
@@ -341,9 +499,8 @@ async function executeOnce(
   })
 }
 
-/**
- * 从输出中提取 XML tag 包裹的结构化数据
- */
+// --- Structured Output 提取 ---
+
 function extractStructuredOutput(output: string, extraction: OutputExtraction): unknown {
   const { tag, parseJson } = extraction
   const regex = new RegExp(`<${tag}>([\\s\\S]*?)</${tag}>`)
@@ -352,18 +509,13 @@ function extractStructuredOutput(output: string, extraction: OutputExtraction): 
 
   const content = match[1].trim()
   if (parseJson) {
-    try {
-      return JSON.parse(content)
-    } catch {
-      return content
-    }
+    try { return JSON.parse(content) } catch { return content }
   }
   return content
 }
 
-/**
- * 拓扑排序
- */
+// --- 拓扑排序 ---
+
 function topologicalSort(steps: PipelineStep[]): PipelineStep[] {
   const sorted: PipelineStep[] = []
   const visited = new Set<string>()
@@ -380,9 +532,6 @@ function topologicalSort(steps: PipelineStep[]): PipelineStep[] {
     sorted.push(step)
   }
 
-  for (const step of steps) {
-    visit(step)
-  }
-
+  for (const step of steps) visit(step)
   return sorted
 }

@@ -7,8 +7,10 @@ import { TaskStatusBar } from '@/components/task-status-bar'
 import { ChatPanel } from '@/components/chat-panel'
 import { ContextPanel } from '@/components/context-panel'
 import { PipelineEditor } from '@/components/pipeline-editor'
+import { ScheduleManager } from '@/components/schedule-manager'
+import { WebhookManager } from '@/components/webhook-manager'
 
-type Tab = 'agents' | 'pipelines'
+type Tab = 'agents' | 'pipelines' | 'schedules' | 'webhooks'
 
 export default function HomePage() {
   const { selectedAgentId, setAgents, setSkills } = useAgentStore()
@@ -25,24 +27,23 @@ export default function HomePage() {
       <aside className="w-72 border-r border-gray-200 bg-white flex flex-col">
         {/* Tab 切换 */}
         <div className="flex border-b border-gray-200">
-          <button
-            onClick={() => setTab('agents')}
-            className={`flex-1 py-2 text-xs font-medium ${tab === 'agents' ? 'text-blue-600 border-b-2 border-blue-600' : 'text-gray-500'}`}
-          >
-            Agents
-          </button>
-          <button
-            onClick={() => setTab('pipelines')}
-            className={`flex-1 py-2 text-xs font-medium ${tab === 'pipelines' ? 'text-blue-600 border-b-2 border-blue-600' : 'text-gray-500'}`}
-          >
-            Pipelines
-          </button>
+          {(['agents', 'pipelines', 'schedules', 'webhooks'] as Tab[]).map(t => (
+            <button
+              key={t}
+              onClick={() => setTab(t)}
+              className={`flex-1 py-2 text-xs font-medium ${tab === t ? 'text-blue-600 border-b-2 border-blue-600' : 'text-gray-500'}`}
+            >
+              {t === 'agents' ? 'Agents' : t === 'pipelines' ? 'Pipelines' : t === 'schedules' ? '定时' : 'Webhook'}
+            </button>
+          ))}
         </div>
 
         {tab === 'agents' && <AgentList />}
-        {tab === 'pipelines' && (
+        {tab !== 'agents' && (
           <div className="flex-1 flex items-center justify-center text-xs text-gray-400 p-4">
-            Pipeline 编辑器在右侧主区域
+            {tab === 'pipelines' && 'Pipeline 编辑器在右侧主区域'}
+            {tab === 'schedules' && '定时任务管理在右侧主区域'}
+            {tab === 'webhooks' && 'Webhook 管理在右侧主区域'}
           </div>
         )}
       </aside>
@@ -51,6 +52,10 @@ export default function HomePage() {
       <main className="flex-1 flex flex-col">
         {tab === 'pipelines' ? (
           <PipelineEditor />
+        ) : tab === 'schedules' ? (
+          <ScheduleManager />
+        ) : tab === 'webhooks' ? (
+          <WebhookManager />
         ) : selectedAgentId ? (
           <>
             <TaskStatusBar />
