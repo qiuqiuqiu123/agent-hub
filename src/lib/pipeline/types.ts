@@ -75,5 +75,11 @@ export interface StepResult {
   sessionId?: string
   commits: string[]
   iterations?: number
+  usage?: TokenUsage
   error?: string
+}
+
+export interface TokenUsage {
+  inputTokens: number
+  outputTokens: number
 }

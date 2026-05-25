@@ -1,0 +1,157 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "pipeline.schema.json",
+  "title": "Agent-Hub Pipeline Config",
+  "type": "object",
+  "required": ["version", "steps", "git"],
+  "properties": {
+    "$schema": { "type": "string" },
+    "version": { "const": "1" },
+    "name": { "type": "string" },
+    "description": { "type": "string" },
+    "input": {
+      "type": "object",
+      "additionalProperties": { "$ref": "#/$defs/PipelineInputParam" }
+    },
+    "steps": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/PipelineStep" }
+    },
+    "git": { "$ref": "#/$defs/GitConfig" },
+    "agents": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/BundleAgent" }
+    }
+  },
+  "$defs": {
+    "PipelineInputParam": {
+      "type": "object",
+      "required": ["type"],
+      "properties": {
+        "type": { "enum": ["string", "number", "boolean"] },
+        "required": { "type": "boolean" },
+        "default": { "type": "string" },
+        "description": { "type": "string" }
+      },
+      "additionalProperties": false
+    },
+    "GitConfig": {
+      "type": "object",
+      "required": ["enabled", "baseBranch", "autoMerge"],
+      "properties": {
+        "enabled": { "type": "boolean" },
+        "baseBranch": { "type": "string" },
+        "autoMerge": { "type": "boolean" }
+      },
+      "additionalProperties": false
+    },
+    "PipelineStep": {
+      "oneOf": [
+        { "$ref": "#/$defs/SingleStep" },
+        { "$ref": "#/$defs/ParallelStep" },
+        { "$ref": "#/$defs/ConditionStep" }
+      ]
+    },
+    "FailureStrategy": { "enum": ["stop", "skip", "retry"] },
+    "OutputExtraction": {
+      "type": "object",
+      "required": ["tag"],
+      "properties": {
+        "tag": { "type": "string" },
+        "parseJson": { "type": "boolean" },
+        "schema": {
+          "type": "object",
+          "additionalProperties": { "type": "string" }
+        }
+      },
+      "additionalProperties": false
+    },
+    "SingleStep": {
+      "type": "object",
+      "required": ["id", "type", "prompt"],
+      "properties": {
+        "id": { "type": "string" },
+        "type": { "const": "single" },
+        "agentId": { "type": "string" },
+        "agentRef": { "type": "string" },
+        "prompt": { "type": "string" },
+        "promptArgs": { "type": "object", "additionalProperties": { "type": "string" } },
+        "dependsOn": { "type": "array", "items": { "type": "string" } },
+        "onFailure": { "$ref": "#/$defs/FailureStrategy" },
+        "maxRetries": { "type": "number" },
+        "resumeFrom": { "type": "string" },
+        "maxIterations": { "type": "number" },
+        "completionSignal": { "type": "string" },
+        "output": { "$ref": "#/$defs/OutputExtraction" }
+      },
+      "anyOf": [{ "required": ["agentId"] }, { "required": ["agentRef"] }],
+      "additionalProperties": false
+    },
+    "ParallelStep": {
+      "type": "object",
+      "required": ["id", "type", "steps"],
+      "properties": {
+        "id": { "type": "string" },
+        "type": { "const": "parallel" },
+        "steps": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/ParallelSubStep" }
+        },
+        "dependsOn": { "type": "array", "items": { "type": "string" } },
+        "onFailure": { "$ref": "#/$defs/FailureStrategy" }
+      },
+      "additionalProperties": false
+    },
+    "ParallelSubStep": {
+      "type": "object",
+      "required": ["id", "prompt"],
+      "properties": {
+        "id": { "type": "string" },
+        "agentId": { "type": "string" },
+        "agentRef": { "type": "string" },
+        "prompt": { "type": "string" },
+        "promptArgs": { "type": "object", "additionalProperties": { "type": "string" } },
+        "onFailure": { "$ref": "#/$defs/FailureStrategy" },
+        "maxRetries": { "type": "number" },
+        "resumeFrom": { "type": "string" },
+        "maxIterations": { "type": "number" },
+        "completionSignal": { "type": "string" },
+        "output": { "$ref": "#/$defs/OutputExtraction" }
+      },
+      "anyOf": [{ "required": ["agentId"] }, { "required": ["agentRef"] }],
+      "additionalProperties": false
+    },
+    "ConditionStep": {
+      "type": "object",
+      "required": ["id", "type", "input", "field", "branches"],
+      "properties": {
+        "id": { "type": "string" },
+        "type": { "const": "condition" },
+        "input": { "type": "string" },
+        "field": { "type": "string" },
+        "branches": {
+          "type": "object",
+          "additionalProperties": { "type": "array", "items": { "type": "string" } }
+        },
+        "dependsOn": { "type": "array", "items": { "type": "string" } }
+      },
+      "additionalProperties": false
+    },
+    "BundleAgent": {
+      "type": "object",
+      "required": ["refId", "name", "type", "provider", "role", "personality", "systemPrompt"],
+      "properties": {
+        "refId": { "type": "string" },
+        "name": { "type": "string" },
+        "type": { "enum": ["ai", "tool"] },
+        "provider": { "type": "string" },
+        "role": { "type": "string" },
+        "personality": { "type": "string" },
+        "systemPrompt": { "type": "string" },
+        "modelId": { "type": "string" },
+        "config": { "type": "string" }
+      },
+      "additionalProperties": false
+    }
+  }
+}

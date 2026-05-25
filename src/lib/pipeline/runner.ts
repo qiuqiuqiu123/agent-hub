@@ -19,12 +19,14 @@ export interface RunPipelineOptions {
   workDir: string
   input?: Record<string, string>  // 外部注入的 input 参数
   signal?: AbortSignal
+  onRunStart?: (runId: string) => void
   onStepStart?: (stepId: string) => void
   onStepComplete?: (stepId: string, result: StepResult) => void
+  onRunComplete?: (runId: string, status: 'completed' | 'failed', error?: string) => void
 }
 
 export async function runPipeline(options: RunPipelineOptions): Promise<string> {
-  const { pipelineId, pipelineName, config, workDir, input, signal, onStepStart, onStepComplete } = options
+  const { pipelineId, pipelineName, config, workDir, input, signal, onRunStart, onStepStart, onStepComplete, onRunComplete } = options
 
   const runId = generateId()
   let branch: string | null = null
@@ -44,6 +46,7 @@ export async function runPipeline(options: RunPipelineOptions): Promise<string> 
     baseSha,
     startedAt: new Date(),
   })
+  onRunStart?.(runId)
 
   try {
     const results = new Map<string, StepResult>()
@@ -149,12 +152,15 @@ export async function runPipeline(options: RunPipelineOptions): Promise<string> 
       .set({ status: hasFailure ? 'failed' : 'completed', completedAt: new Date() })
       .where(eq(pipelineRuns.id, runId))
 
+    onRunComplete?.(runId, hasFailure ? 'failed' : 'completed')
+
     return runId
   } catch (err) {
     const error = err instanceof Error ? err.message : String(err)
     await db.update(pipelineRuns)
       .set({ status: 'failed', error, completedAt: new Date() })
       .where(eq(pipelineRuns.id, runId))
+    onRunComplete?.(runId, 'failed', error)
     return runId
   }
 }
@@ -359,6 +365,8 @@ async function executeAIStep(
   const maxIterations = step.maxIterations || 1
   const completionSignal = step.completionSignal || DEFAULT_COMPLETION_SIGNAL
   let totalOutput = ''
+  let totalInputTokens = 0
+  let totalOutputTokens = 0
   let currentSessionId = sessionId
   let iterations = 0
 
@@ -368,6 +376,8 @@ async function executeAIStep(
 
     const iterResult = await executeOnce(agent, finalPrompt, systemPrompt, workDir, currentSessionId, completionSignal, signal)
     totalOutput += iterResult.output
+    totalInputTokens += iterResult.usage?.inputTokens || 0
+    totalOutputTokens += iterResult.usage?.outputTokens || 0
     if (iterResult.sessionId) currentSessionId = iterResult.sessionId
     if (iterResult.completed || iterResult.status === 'failed') break
   }
@@ -382,7 +392,14 @@ async function executeAIStep(
   const error = signal?.aborted ? 'Cancelled' : undefined
 
   await db.update(pipelineStepRuns)
-    .set({ status: finalStatus, output: totalOutput, error, completedAt: new Date() })
+    .set({
+      status: finalStatus,
+      output: totalOutput,
+      inputTokens: totalInputTokens,
+      outputTokens: totalOutputTokens,
+      error,
+      completedAt: new Date(),
+    })
     .where(eq(pipelineStepRuns.id, stepRunId))
 
   return {
@@ -393,6 +410,7 @@ async function executeAIStep(
     sessionId: currentSessionId,
     commits: [],
     iterations,
+    usage: { inputTokens: totalInputTokens, outputTokens: totalOutputTokens },
     error,
   }
 }
@@ -404,6 +422,7 @@ interface IterationResult {
   sessionId?: string
   completed: boolean
   status: 'completed' | 'failed'
+  usage?: { inputTokens: number; outputTokens: number }
 }
 
 async function executeOnce(
@@ -434,6 +453,8 @@ async function executeOnce(
     let output = ''
     let capturedSessionId: string | undefined
     let completed = false
+    let inputTokens = 0
+    let outputTokens = 0
     let idleTimer: ReturnType<typeof setTimeout> | null = null
 
     const resetIdle = () => {
@@ -475,6 +496,10 @@ async function executeOnce(
         case 'session_id':
           capturedSessionId = evt.id
           break
+        case 'usage':
+          inputTokens += evt.inputTokens
+          outputTokens += evt.outputTokens
+          break
       }
     }
 
@@ -484,7 +509,7 @@ async function executeOnce(
       finished = true
       if (idleTimer) clearTimeout(idleTimer)
       signal?.removeEventListener('abort', abortHandler)
-      resolve({ output, sessionId: capturedSessionId, completed, status })
+      resolve({ output, sessionId: capturedSessionId, completed, status, usage: { inputTokens, outputTokens } })
     }
 
     proc.on('close', (code) => {

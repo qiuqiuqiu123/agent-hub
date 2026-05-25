@@ -20,6 +20,8 @@ interface StepRun {
   status: string
   prompt: string
   output: string | null
+  inputTokens: number | null
+  outputTokens: number | null
   error: string | null
   startedAt: string | null
   completedAt: string | null
@@ -34,7 +36,15 @@ const statusIcon: Record<string, React.ReactNode> = {
   cancelled: <Square size={14} className="text-orange-500" />,
 }
 
-export function PipelineRunView({ pipelineId }: { pipelineId: string }) {
+interface PipelineEvent {
+  type: 'step_start' | 'step_complete' | 'run_complete'
+  stepId?: string
+  status?: string
+  output?: string
+  usage?: { inputTokens: number; outputTokens: number }
+}
+
+export function PipelineRunView({ pipelineId, activeRunId }: { pipelineId: string; activeRunId?: string | null }) {
   const [runs, setRuns] = useState<PipelineRun[]>([])
   const [selectedRun, setSelectedRun] = useState<PipelineRun | null>(null)
 
@@ -42,17 +52,62 @@ export function PipelineRunView({ pipelineId }: { pipelineId: string }) {
     fetchRuns()
     const interval = setInterval(fetchRuns, 3000)
     return () => clearInterval(interval)
-  }, [pipelineId])
+  }, [pipelineId, activeRunId])
+
+  useEffect(() => {
+    if (!activeRunId) return
+    const source = new EventSource(`/api/pipelines/${pipelineId}/runs/${activeRunId}/events`)
+    source.onmessage = event => {
+      const data = JSON.parse(event.data) as PipelineEvent
+      applyPipelineEvent(activeRunId, data)
+      if (data.type === 'run_complete') {
+        source.close()
+        fetchRuns()
+      }
+    }
+    return () => source.close()
+  }, [pipelineId, activeRunId])
 
   async function fetchRuns() {
     const res = await fetch(`/api/pipelines/${pipelineId}/runs`)
     if (res.ok) {
       const data = await res.json()
       setRuns(data)
-      if (data.length > 0 && !selectedRun) {
-        setSelectedRun(data[0])
-      }
+      setSelectedRun(current => {
+        if (activeRunId) {
+          const activeRun = data.find((run: PipelineRun) => run.id === activeRunId)
+          if (activeRun) return activeRun
+        }
+        if (current) return data.find((run: PipelineRun) => run.id === current.id) || current
+        return data[0] || null
+      })
     }
+  }
+
+  function applyPipelineEvent(runId: string, event: PipelineEvent) {
+    setRuns(current => current.map(run => run.id === runId ? applyEventToRun(run, event) : run))
+    setSelectedRun(current => current?.id === runId ? applyEventToRun(current, event) : current)
+  }
+
+  function applyEventToRun(run: PipelineRun, event: PipelineEvent): PipelineRun {
+    if (event.type === 'run_complete') {
+      return { ...run, status: event.status || run.status }
+    }
+    if (!event.stepId) return run
+
+    const index = run.steps.findIndex(step => step.stepId === event.stepId)
+    if (index === -1) return run
+
+    const steps = [...run.steps]
+    const step = steps[index]
+    steps[index] = {
+      ...step,
+      status: event.type === 'step_start' ? 'running' : event.status || step.status,
+      output: event.output ?? step.output,
+      inputTokens: event.usage?.inputTokens ?? step.inputTokens,
+      outputTokens: event.usage?.outputTokens ?? step.outputTokens,
+    }
+    return { ...run, steps }
   }
 
   if (runs.length === 0) {
@@ -103,6 +158,11 @@ export function PipelineRunView({ pipelineId }: { pipelineId: string }) {
                   {step.startedAt && step.completedAt && (
                     <span className="text-xs text-gray-400 ml-auto">
                       {Math.round((new Date(step.completedAt).getTime() - new Date(step.startedAt).getTime()) / 1000)}s
+                    </span>
+                  )}
+                  {((step.inputTokens || 0) + (step.outputTokens || 0)) > 0 && (
+                    <span className="text-xs text-purple-600 bg-purple-50 px-1.5 py-0.5 rounded">
+                      {(step.inputTokens || 0) + (step.outputTokens || 0)} tokens
                     </span>
                   )}
                 </div>

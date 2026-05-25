@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback, useRef } from 'react'
 import { Plus, Trash2, Play, ChevronRight, GitBranch } from 'lucide-react'
 import { PipelineRunView } from './pipeline-run-view'
 
@@ -18,6 +18,8 @@ export function PipelineEditor() {
   const [configText, setConfigText] = useState('')
   const [showRuns, setShowRuns] = useState(false)
   const [error, setError] = useState('')
+  const [activeRunId, setActiveRunId] = useState<string | null>(null)
+  const importInputRef = useRef<HTMLInputElement>(null)
 
   useEffect(() => {
     fetchPipelines()
@@ -108,8 +110,32 @@ export function PipelineEditor() {
     if (!selected) return
     const res = await fetch(`/api/pipelines/${selected.id}/run`, { method: 'POST' })
     if (res.ok) {
+      const data = await res.json()
+      setActiveRunId(data.runId || null)
       setShowRuns(true)
     }
+  }
+
+  async function handleExport() {
+    if (!selected) return
+    window.location.href = `/api/pipelines/${selected.id}/export`
+  }
+
+  async function handleImportFile(file: File) {
+    const text = await file.text()
+    const res = await fetch('/api/pipelines/import', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: text,
+    })
+    if (!res.ok) {
+      const data = await res.json().catch(() => ({}))
+      setError(data.error || '导入失败')
+      return
+    }
+    const created = await res.json()
+    await fetchPipelines()
+    selectPipeline(created)
   }
 
   // 从 config 解析出流程预览
@@ -146,13 +172,29 @@ export function PipelineEditor() {
 
   return (
     <div className="flex h-full">
+      <input
+        ref={importInputRef}
+        type="file"
+        accept="application/json,.json"
+        className="hidden"
+        onChange={e => {
+          const file = e.target.files?.[0]
+          if (file) handleImportFile(file)
+          e.currentTarget.value = ''
+        }}
+      />
       {/* 左侧 Pipeline 列表 */}
       <div className="w-56 border-r border-gray-200 flex flex-col">
         <div className="p-3 border-b border-gray-200 flex items-center justify-between">
           <span className="text-sm font-medium">Pipelines</span>
-          <button onClick={handleCreate} className="p-1 rounded hover:bg-gray-100">
-            <Plus size={16} />
-          </button>
+          <div className="flex items-center gap-1">
+            <button onClick={() => importInputRef.current?.click()} className="text-xs px-1.5 py-1 rounded hover:bg-gray-100">
+              导入
+            </button>
+            <button onClick={handleCreate} className="p-1 rounded hover:bg-gray-100">
+              <Plus size={16} />
+            </button>
+          </div>
         </div>
         <div className="flex-1 overflow-y-auto">
           {pipelines.map(p => (
@@ -189,6 +231,18 @@ export function PipelineEditor() {
                   {showRuns ? '编辑' : '执行记录'}
                 </button>
                 <button
+                  onClick={() => importInputRef.current?.click()}
+                  className="text-xs px-2 py-1 rounded border border-gray-200 hover:bg-gray-50"
+                >
+                  导入
+                </button>
+                <button
+                  onClick={handleExport}
+                  className="text-xs px-2 py-1 rounded border border-gray-200 hover:bg-gray-50"
+                >
+                  导出 JSON
+                </button>
+                <button
                   onClick={handleSave}
                   className="text-xs px-2 py-1 rounded bg-gray-800 text-white hover:bg-gray-700"
                 >
@@ -204,7 +258,7 @@ export function PipelineEditor() {
             </div>
 
             {showRuns ? (
-              <PipelineRunView pipelineId={selected.id} />
+              <PipelineRunView pipelineId={selected.id} activeRunId={activeRunId} />
             ) : (
               <div className="flex-1 flex">
                 {/* JSON 编辑器 */}

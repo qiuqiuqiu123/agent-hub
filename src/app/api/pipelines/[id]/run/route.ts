@@ -1,8 +1,9 @@
 import { NextRequest } from 'next/server'
 import { db } from '@/db'
-import { pipelines, pipelineRuns, agents } from '@/db/schema'
+import { pipelines, agents } from '@/db/schema'
 import { eq } from 'drizzle-orm'
 import { runPipeline } from '@/lib/pipeline/runner'
+import { emitPipelineEvent } from '@/lib/pipeline/events'
 import type { PipelineConfig } from '@/lib/pipeline/types'
 
 export async function POST(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
@@ -38,6 +39,10 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
     // 空 body 没关系
   }
 
+  let resolveRunStart: (runId: string) => void = () => {}
+  const runStartPromise = new Promise<string>(resolve => { resolveRunStart = resolve })
+  let startedRunId = ''
+
   // 异步执行 pipeline
   const runPromise = runPipeline({
     pipelineId: id,
@@ -45,18 +50,35 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
     config,
     workDir,
     input,
+    onRunStart(runId) {
+      startedRunId = runId
+      resolveRunStart(runId)
+    },
+    onStepStart(stepId) {
+      if (!startedRunId) return
+      emitPipelineEvent(startedRunId, { type: 'step_start', stepId, timestamp: Date.now() })
+    },
+    onStepComplete(stepId, result) {
+      if (!startedRunId) return
+      emitPipelineEvent(startedRunId, {
+        type: 'step_complete',
+        stepId,
+        status: result.status,
+        output: result.output,
+        usage: result.usage,
+        timestamp: Date.now(),
+      })
+    },
+    onRunComplete(runId, status, error) {
+      emitPipelineEvent(runId, { type: 'run_complete', status, error, timestamp: Date.now() })
+    },
   })
   runPromise.catch(() => {})
 
-  // 短暂等待让 run 记录创建
-  await new Promise(resolve => setTimeout(resolve, 100))
+  await Promise.race([
+    runStartPromise,
+    new Promise(resolve => setTimeout(resolve, 1000)),
+  ])
 
-  const [latestRun] = await db
-    .select()
-    .from(pipelineRuns)
-    .where(eq(pipelineRuns.pipelineId, id))
-    .orderBy(pipelineRuns.startedAt)
-    .limit(1)
-
-  return Response.json({ runId: latestRun?.id, status: 'started' }, { status: 202 })
+  return Response.json({ runId: startedRunId, status: 'started' }, { status: 202 })
 }

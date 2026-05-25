@@ -106,6 +106,8 @@ export const pipelineStepRuns = sqliteTable('pipeline_step_runs', {
   prompt: text('prompt').notNull(),
   output: text('output'),
   commits: text('commits'), // JSON: string[]
+  inputTokens: integer('input_tokens'),
+  outputTokens: integer('output_tokens'),
   error: text('error'),
   startedAt: integer('started_at', { mode: 'timestamp' }),
   completedAt: integer('completed_at', { mode: 'timestamp' }),
