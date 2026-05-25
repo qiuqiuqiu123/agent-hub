@@ -1,0 +1,30 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "Agent-Hub",
+  "version": "0.1.0",
+  "identifier": "com.agent-hub.app",
+  "build": {
+    "beforeDevCommand": "pnpm dev -- --port 3939",
+    "beforeBuildCommand": "pnpm build",
+    "devUrl": "http://localhost:3939",
+    "frontendDist": "../.next/standalone"
+  },
+  "app": {
+    "windows": [
+      {
+        "label": "main",
+        "title": "Agent-Hub",
+        "width": 1280,
+        "height": 800,
+        "url": "http://localhost:3939"
+      }
+    ],
+    "security": {
+      "capabilities": ["default"]
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": ["dmg", "nsis", "appimage"]
+  }
+}

@@ -1,11 +1,26 @@
 {
   "name": "agent-hub",
   "version": "0.1.0",
-  "private": true,
+  "private": false,
+  "bin": {
+    "agent-hub": "./bin/agent-hub.js"
+  },
+  "files": [
+    "bin/",
+    ".next/standalone/",
+    ".next/static/",
+    "public/",
+    "src/db/migrations/"
+  ],
   "scripts": {
     "dev": "next dev",
     "build": "next build",
+    "postbuild": "node scripts/prepare-standalone.js",
     "start": "next start",
+    "tauri": "tauri",
+    "tauri:dev": "tauri dev",
+    "tauri:build": "tauri build",
+    "prepublishOnly": "pnpm build",
     "db:generate": "drizzle-kit generate",
     "db:migrate": "drizzle-kit migrate",
     "db:push": "drizzle-kit push",
@@ -30,6 +45,7 @@
     "zustand": "^5.0.0"
   },
   "devDependencies": {
+    "@tauri-apps/cli": "^2.11.2",
     "@types/better-sqlite3": "^7.6.0",
     "@types/node": "^22.0.0",
     "@types/node-cron": "^3.0.11",

@@ -3,8 +3,14 @@ import { drizzle } from 'drizzle-orm/better-sqlite3'
 import * as schema from './schema'
 import path from 'path'
 import fs from 'fs'
+import os from 'os'
 
-const dbPath = process.env.AGENT_HUB_DB_PATH || path.join(process.cwd(), 'data', 'agent-hub.db')
+function getDataDir(): string {
+  if (process.env.AGENT_HUB_DATA_DIR) return process.env.AGENT_HUB_DATA_DIR
+  return path.join(os.homedir(), '.agent-hub', 'data')
+}
+
+const dbPath = process.env.AGENT_HUB_DB_PATH || path.join(getDataDir(), 'agent-hub.db')
 if (dbPath !== ':memory:') {
   fs.mkdirSync(path.dirname(dbPath), { recursive: true })
 }
