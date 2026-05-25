@@ -14,7 +14,8 @@ import type { ToolProvider, ToolResult } from './types'
  *   CONTENT — HTML 正文（可包含 {{IMAGE_URL}} 占位符）
  *   THUMB_URL — 封面图 URL（下载后上传为永久素材）
  *   THUMB_BASE64 — (或) 封面图 base64
- *   IMAGE_BASE64 — (可选) 正文图片 base64，上传后替换 CONTENT 中的 {{IMAGE_URL}}
+  *   IMAGE_BASE64 — (可选) 正文图片 base64，上传后替换 CONTENT 中的 {{IMAGE_URL}}
+ *   SKIP_CONTENT_IMAGE_UPLOAD — (可选) 设为 true 时不上传正文图片
  *   AUTHOR — (可选) 作者
  *   DIGEST — (可选) 摘要
  *
@@ -181,7 +182,7 @@ export function createWechatMpProvider(): ToolProvider {
         let finalContent = content
         const imageBase64 = input.IMAGE_BASE64
         let contentImageUrl = ''
-        if (imageBase64) {
+        if (imageBase64 && input.SKIP_CONTENT_IMAGE_UPLOAD !== 'true') {
           const imgBuffer = Buffer.from(imageBase64, 'base64')
           contentImageUrl = await uploadContentImage(accessToken, imgBuffer, 'image/png')
           // 替换 content 中的占位符，或追加图片到正文
@@ -191,18 +192,20 @@ export function createWechatMpProvider(): ToolProvider {
             // 没有占位符则在正文开头插入图片
             finalContent = `<p style="text-align:center;"><img src="${contentImageUrl}" style="width:100%;max-width:600px;" /></p>\n${finalContent}`
           }
+        } else if (finalContent.includes('{{IMAGE_URL}}')) {
+          finalContent = finalContent.replace(/\{\{IMAGE_URL\}\}/g, '')
         }
 
-        // 上传封面图：优先用 base64，否则下载 URL
+        // 上传封面图：优先用 URL，避免部分生成图片的 PNG 编码/元数据被微信素材接口拒绝
         let buffer: Buffer
         let contentType: string
-        if (thumbBase64) {
-          buffer = Buffer.from(thumbBase64, 'base64')
-          contentType = 'image/png'
-        } else {
+        if (thumbUrl) {
           const downloaded = await downloadImage(thumbUrl!)
           buffer = downloaded.buffer
           contentType = downloaded.contentType
+        } else {
+          buffer = Buffer.from(thumbBase64!, 'base64')
+          contentType = 'image/png'
         }
         const thumbMediaId = await uploadThumbMaterial(accessToken, buffer, contentType)
 

@@ -11,6 +11,7 @@ import type { PipelineConfig, PipelineStep, SingleStep, ConditionStep, StepResul
 
 const IDLE_TIMEOUT_MS = 10 * 60 * 1000
 const DEFAULT_COMPLETION_SIGNAL = '<done>COMPLETE</done>'
+const MAX_PROMPT_CONTEXT_CHARS = 2000
 
 export interface RunPipelineOptions {
   pipelineId: string
@@ -91,10 +92,10 @@ export async function runPipeline(options: RunPipelineOptions): Promise<string> 
       const deps = step.dependsOn || []
       const depsOk = deps.every(d => {
         const r = results.get(d)
-        return r?.status === 'completed' || r?.status === 'skipped'
+        return r ? isDependencySatisfied(r) : false
       })
       if (!depsOk) {
-        const skipResult: StepResult = { stepId: step.id, status: 'skipped', output: '', commits: [] }
+        const skipResult: StepResult = { stepId: step.id, status: 'skipped', output: '', commits: [], error: 'Dependency not completed' }
         results.set(step.id, skipResult)
         continue
       }
@@ -215,14 +216,18 @@ async function executeStepWithRetry(
 
   // skip 策略：标记为 skipped 而非 failed
   if (step.onFailure === 'skip' && lastResult) {
-    return { ...lastResult, status: 'skipped' }
+    return { ...lastResult, status: 'skipped', error: undefined }
   }
   return lastResult!
 }
 
+export function isDependencySatisfied(result: StepResult): boolean {
+  return result.status === 'completed' || (result.status === 'skipped' && !result.error)
+}
+
 // --- 构建模板参数 ---
 
-function buildTemplateArgs(
+export function buildTemplateArgs(
   results: Map<string, StepResult>,
   pipelineInput: Record<string, string>,
   workDir: string,
@@ -230,12 +235,56 @@ function buildTemplateArgs(
   const args: Record<string, string> = { ...pipelineInput }
   if (workDir) args.WORK_DIR = workDir
   for (const [id, result] of results) {
-    args[`STEP_${id.toUpperCase()}_OUTPUT`] = result.output || ''
+    const prefix = `STEP_${id.toUpperCase()}`
+    args[`${prefix}_OUTPUT`] = sanitizePromptContextValue(result.output || '')
     if (result.structuredOutput) {
-      args[`STEP_${id.toUpperCase()}_DATA`] = JSON.stringify(result.structuredOutput)
+      args[`${prefix}_DATA`] = stringifyPromptContext(result.structuredOutput)
+      if (isPlainObject(result.structuredOutput)) {
+        for (const [key, value] of Object.entries(result.structuredOutput)) {
+          const stringValue = typeof value === 'string' ? value : JSON.stringify(value)
+          args[`${prefix}_DATA.${key}`] = stringValue
+          args[`${prefix}_DATA_${toEnvKey(key)}`] = stringValue
+        }
+      }
     }
   }
   return args
+}
+
+function stringifyPromptContext(value: unknown): string {
+  return JSON.stringify(sanitizePromptContext(value))
+}
+
+function sanitizePromptContext(value: unknown): unknown {
+  if (typeof value === 'string') return sanitizePromptContextValue(value)
+  if (Array.isArray(value)) return value.map(item => sanitizePromptContext(item))
+  if (isPlainObject(value)) {
+    const result: Record<string, unknown> = {}
+    for (const [key, item] of Object.entries(value)) {
+      result[key] = sanitizePromptContext(item)
+    }
+    return result
+  }
+  return value
+}
+
+function sanitizePromptContextValue(value: string): string {
+  if (value.length <= MAX_PROMPT_CONTEXT_CHARS) return value
+
+  try {
+    const parsed = JSON.parse(value)
+    return stringifyPromptContext(parsed)
+  } catch {
+    return `[large output omitted: ${value.length} chars]`
+  }
+}
+
+function isPlainObject(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === 'object' && !Array.isArray(value)
+}
+
+function toEnvKey(key: string): string {
+  return key.replace(/[^a-zA-Z0-9]+/g, '_').replace(/^_|_$/g, '').toUpperCase()
 }
 
 // --- Step 执行（AI / Tool 分流）---
