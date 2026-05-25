@@ -5,6 +5,7 @@ import os from 'os'
 function getDatabaseUrl() {
   if (process.env.AGENT_HUB_DB_PATH) return process.env.AGENT_HUB_DB_PATH
   if (process.env.AGENT_HUB_DATA_DIR) return path.join(process.env.AGENT_HUB_DATA_DIR, 'agent-hub.db')
+  if (process.env.NODE_ENV !== 'production') return './data/agent-hub.db'
   return path.join(os.homedir(), '.agent-hub', 'data', 'agent-hub.db')
 }
 

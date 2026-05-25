@@ -7,6 +7,7 @@ import os from 'os'
 
 function getDataDir(): string {
   if (process.env.AGENT_HUB_DATA_DIR) return process.env.AGENT_HUB_DATA_DIR
+  if (process.env.NODE_ENV !== 'production') return path.join(process.cwd(), 'data')
   return path.join(os.homedir(), '.agent-hub', 'data')
 }
 

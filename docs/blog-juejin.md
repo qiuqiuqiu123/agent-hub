@@ -323,6 +323,6 @@ Agent-Hub 的核心价值在于：**把 AI 的创造力和 API 的确定性用 P
 
 ---
 
-项目地址：github.com/anthropic-lab/agent-hub（即将开源）
+项目地址：https://github.com/qiuqiuqiu123/agent-hub.git
 
 如果你也在做 AI Agent 编排相关的事情，欢迎交流。
