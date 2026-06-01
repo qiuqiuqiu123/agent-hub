@@ -1,0 +1,10 @@
+.git
+.gitignore
+.next
+node_modules
+data
+.env.local
+.DS_Store
+*.log
+coverage
+dist

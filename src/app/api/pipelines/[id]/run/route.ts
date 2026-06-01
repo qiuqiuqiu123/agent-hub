@@ -4,10 +4,24 @@ import { pipelines, agents } from '@/db/schema'
 import { eq } from 'drizzle-orm'
 import { runPipeline } from '@/lib/pipeline/runner'
 import { emitPipelineEvent } from '@/lib/pipeline/events'
+import { createRunWorkspace } from '@/lib/run-isolation'
+import { checkRateLimit } from '@/lib/rate-limit'
 import type { PipelineConfig } from '@/lib/pipeline/types'
 
 export async function POST(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   const { id } = await params
+
+  // Rate limiting by IP
+  const ip = req.headers.get('x-forwarded-for')?.split(',')[0]?.trim()
+    || req.headers.get('x-real-ip')
+    || 'unknown'
+  const rateResult = checkRateLimit(`pipeline-run:${ip}`)
+  if (!rateResult.allowed) {
+    return Response.json(
+      { error: '请求过于频繁，请稍后再试', resetAt: rateResult.resetAt },
+      { status: 429 }
+    )
+  }
 
   const [pipeline] = await db.select().from(pipelines).where(eq(pipelines.id, id))
   if (!pipeline) {
@@ -29,12 +43,16 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
     if (agent?.workDir) workDir = agent.workDir
   }
 
-  // 解析请求体：workDir 覆盖 + input 参数
+  // 解析请求体：workDir 覆盖 + input 参数 + sessionId
   let input: Record<string, string> | undefined
+  let sessionId: string | undefined
+  let useIsolation = false
   try {
     const body = await req.json()
     if (body.workDir) workDir = body.workDir
     if (body.input) input = body.input
+    if (body.sessionId) sessionId = body.sessionId
+    if (body.isolated !== false) useIsolation = true
   } catch {
     // 空 body 没关系
   }
@@ -42,6 +60,18 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
   let resolveRunStart: (runId: string) => void = () => {}
   const runStartPromise = new Promise<string>(resolve => { resolveRunStart = resolve })
   let startedRunId = ''
+
+  // 如果启用隔离模式，创建独立工作空间
+  if (useIsolation) {
+    const tempRunId = `run-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
+    const workspace = await createRunWorkspace(tempRunId, sessionId)
+    workDir = workspace.workDir
+    // 注入上传文件路径到 input
+    if (!input) input = {}
+    input.UPLOADS_DIR = workspace.uploadsDir
+    input.OUTPUT_DIR = workspace.outputDir
+    input.RESOURCES_DIR = workspace.resourcesDir
+  }
 
   // 异步执行 pipeline
   const runPromise = runPipeline({

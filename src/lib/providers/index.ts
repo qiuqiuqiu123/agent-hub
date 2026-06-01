@@ -6,6 +6,7 @@ import { createGithubIssueProvider } from './github-issue'
 import { createEmailProvider } from './email'
 import { createImageGenProvider } from './image-gen'
 import { createWechatMpProvider } from './wechat-mp'
+import { createScriptRunnerProvider } from './script-runner'
 
 export type { AgentProvider, ToolProvider, CommandOptions, CommandResult, ProviderEvent, ToolResult } from './types'
 
@@ -22,6 +23,7 @@ const toolProviders: Record<string, () => ToolProvider> = {
   email: createEmailProvider,
   'image-gen': createImageGenProvider,
   'wechat-mp': createWechatMpProvider,
+  'script-runner': createScriptRunnerProvider,
 }
 
 export function getProvider(name: string): AgentProvider {

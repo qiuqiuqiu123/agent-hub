@@ -62,9 +62,9 @@ const MEME_AGENTS = [
     modelId: '',
     type: 'tool' as const,
     config: JSON.stringify({
-      apiKey: 'sk-S6dMnkynh87xNpEs1pBvpUvI0KyYXMrK16aZ7NiuBqmRrg3F',
-      baseUrl: 'https://xiaomuai.cn/v1',
-      model: 'gpt-image-2',
+      apiKey: process.env.IMAGE_GEN_API_KEY || '',
+      baseUrl: process.env.IMAGE_GEN_BASE_URL || 'https://xiaomuai.cn/v1',
+      model: process.env.IMAGE_GEN_MODEL || 'gpt-image-2',
       size: '1024x1024',
       quality: 'high',
     }),
@@ -102,8 +102,8 @@ const MEME_AGENTS = [
     modelId: '',
     type: 'tool' as const,
     config: JSON.stringify({
-      appId: 'wxa56d85da1b988129',
-      appSecret: '7c861b5d940c67fbb168f2af18dbedfd',
+      appId: process.env.WECHAT_MP_APP_ID || '',
+      appSecret: process.env.WECHAT_MP_APP_SECRET || '',
     }),
   },
 ]
