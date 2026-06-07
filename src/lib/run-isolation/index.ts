@@ -42,6 +42,14 @@ export async function createRunWorkspace(runId: string, sessionId?: string): Pro
     await symlink(RESOURCE_DIR, resourcesDir)
   }
 
+  // Create src/resources/ppt-skill symlink inside workspace so Claude CLI
+  // can resolve relative paths from its cwd (workspace/)
+  const workspaceSrcResources = join(workDir, 'src', 'resources', 'ppt-skill')
+  if (existsSync(RESOURCE_DIR) && !existsSync(workspaceSrcResources)) {
+    await mkdir(join(workDir, 'src', 'resources'), { recursive: true })
+    await symlink(RESOURCE_DIR, workspaceSrcResources)
+  }
+
   // Copy user uploads from session if provided
   if (sessionId && /^[a-zA-Z0-9_-]+$/.test(sessionId)) {
     const sessionUploads = join(UPLOAD_BASE, sessionId, 'uploads')

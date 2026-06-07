@@ -1,6 +1,6 @@
 import { NextRequest } from 'next/server'
 import { db } from '@/db'
-import { pipelines, agents } from '@/db/schema'
+import { pipelines, agents, pipelineRuns } from '@/db/schema'
 import { eq } from 'drizzle-orm'
 import { runPipeline } from '@/lib/pipeline/runner'
 import { emitPipelineEvent } from '@/lib/pipeline/events'
@@ -60,10 +60,12 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
   let resolveRunStart: (runId: string) => void = () => {}
   const runStartPromise = new Promise<string>(resolve => { resolveRunStart = resolve })
   let startedRunId = ''
+  let workspaceRunId = ''
 
   // 如果启用隔离模式，创建独立工作空间
   if (useIsolation) {
     const tempRunId = `run-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
+    workspaceRunId = tempRunId
     const workspace = await createRunWorkspace(tempRunId, sessionId)
     workDir = workspace.workDir
     // 注入上传文件路径到 input
@@ -83,10 +85,21 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
     onRunStart(runId) {
       startedRunId = runId
       resolveRunStart(runId)
+      // Save workspaceRunId and input to DB
+      if (workspaceRunId || input) {
+        db.update(pipelineRuns).set({
+          workspaceRunId: workspaceRunId || null,
+          inputJson: input ? JSON.stringify(input) : null,
+        }).where(eq(pipelineRuns.id, runId)).catch(() => {})
+      }
     },
     onStepStart(stepId) {
       if (!startedRunId) return
       emitPipelineEvent(startedRunId, { type: 'step_start', stepId, timestamp: Date.now() })
+    },
+    onStepProgress(stepId, tokens) {
+      if (!startedRunId) return
+      emitPipelineEvent(startedRunId, { type: 'step_progress', stepId, message: '生成中...', tokens, timestamp: Date.now() })
     },
     onStepComplete(stepId, result) {
       if (!startedRunId) return
@@ -110,5 +123,5 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
     new Promise(resolve => setTimeout(resolve, 1000)),
   ])
 
-  return Response.json({ runId: startedRunId, status: 'started' }, { status: 202 })
+  return Response.json({ runId: startedRunId, workspaceRunId, status: 'started' }, { status: 202 })
 }

@@ -13,6 +13,9 @@ const IDLE_TIMEOUT_MS = 10 * 60 * 1000
 const DEFAULT_COMPLETION_SIGNAL = '<done>COMPLETE</done>'
 const MAX_PROMPT_CONTEXT_CHARS = 2000
 
+// Module-level progress callback for current step
+let _currentProgressCb: ((tokens: { inputTokens: number; outputTokens: number }) => void) | null = null
+
 export interface RunPipelineOptions {
   pipelineId: string
   pipelineName: string
@@ -22,12 +25,13 @@ export interface RunPipelineOptions {
   signal?: AbortSignal
   onRunStart?: (runId: string) => void
   onStepStart?: (stepId: string) => void
+  onStepProgress?: (stepId: string, tokens: { inputTokens: number; outputTokens: number }) => void
   onStepComplete?: (stepId: string, result: StepResult) => void
   onRunComplete?: (runId: string, status: 'completed' | 'failed', error?: string) => void
 }
 
 export async function runPipeline(options: RunPipelineOptions): Promise<string> {
-  const { pipelineId, pipelineName, config, workDir, input, signal, onRunStart, onStepStart, onStepComplete, onRunComplete } = options
+  const { pipelineId, pipelineName, config, workDir, input, signal, onRunStart, onStepStart, onStepProgress, onStepComplete, onRunComplete } = options
 
   const runId = generateId()
   let branch: string | null = null
@@ -131,7 +135,9 @@ export async function runPipeline(options: RunPipelineOptions): Promise<string> 
           commits: step.steps.flatMap(s => results.get(s.id)?.commits || []),
         })
       } else {
+        _currentProgressCb = (tokens) => onStepProgress?.(step.id, tokens)
         const result = await executeStepWithRetry(runId, step, workDir, results, pipelineInput, signal)
+        _currentProgressCb = null
         results.set(step.id, result)
         onStepComplete?.(step.id, result)
 
@@ -548,6 +554,7 @@ async function executeOnce(
         case 'usage':
           inputTokens += evt.inputTokens
           outputTokens += evt.outputTokens
+          _currentProgressCb?.({ inputTokens, outputTokens })
           break
       }
     }

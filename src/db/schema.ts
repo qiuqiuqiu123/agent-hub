@@ -92,6 +92,8 @@ export const pipelineRuns = sqliteTable('pipeline_runs', {
   status: text('status', { enum: ['pending', 'running', 'completed', 'failed', 'cancelled'] }).notNull().default('pending'),
   branch: text('branch'),
   baseSha: text('base_sha'),
+  workspaceRunId: text('workspace_run_id'),
+  inputJson: text('input_json'),  // JSON string of pipeline input params
   error: text('error'),
   startedAt: integer('started_at', { mode: 'timestamp' }).notNull().$defaultFn(() => new Date()),
   completedAt: integer('completed_at', { mode: 'timestamp' }),
