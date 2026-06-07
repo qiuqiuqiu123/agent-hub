@@ -289,13 +289,14 @@ const PPT_PIPELINE = {
       PAGE_COUNT: { type: 'string', required: false, default: '8', description: '目标页数' },
       AUDIENCE: { type: 'string', required: false, default: '', description: '受众/场景' },
       NEED_IMAGES: { type: 'string', required: false, default: 'false', description: '是否需要 AI 配图' },
+      FEEDBACK: { type: 'string', required: false, default: '', description: '用户对上一版的修改意见（用于迭代优化）' },
     },
     steps: [
       {
         id: 'clarify',
         type: 'single',
         agentId: 'agent-ppt-clarify',
-        prompt: '分析以下主题，输出结构化需求：\n\n主题：{{TOPIC}}\n风格偏好：{{STYLE}}\n主题色偏好：{{THEME}}\n目标页数：{{PAGE_COUNT}}\n受众：{{AUDIENCE}}',
+        prompt: '分析以下主题，输出结构化需求：\n\n主题：{{TOPIC}}\n风格偏好：{{STYLE}}\n主题色偏好：{{THEME}}\n目标页数：{{PAGE_COUNT}}\n受众：{{AUDIENCE}}\n{{#if FEEDBACK}}\n## 用户修改意见\n\n用户对上一版 PPT 不满意，修改意见如下：\n{{FEEDBACK}}\n\n请结合以上反馈重新分析需求，着重解决用户提出的问题。\n{{/if}}',
         output: { tag: 'data', parseJson: true },
       },
       {

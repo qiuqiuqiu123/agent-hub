@@ -77,13 +77,14 @@ const PPT_ENHANCE_PIPELINE = {
       STYLE: { type: 'string', required: false, default: 'B', description: '风格' },
       TOPIC: { type: 'string', required: true, default: '', description: '主题' },
       IMAGE_SLOTS: { type: 'string', required: false, default: '', description: '需要配图的位置描述' },
+      FEEDBACK: { type: 'string', required: false, default: '', description: '用户对配图的修改意见（用于迭代优化）' },
     },
     steps: [
       {
         id: 'generate_images',
         type: 'single',
         agentId: 'agent-ppt-image-gen',
-        prompt: '为以下 PPT 生成配图：\n\n主题：{{TOPIC}}\n风格：{{STYLE}}\n配图位置：{{IMAGE_SLOTS}}',
+        prompt: '为以下 PPT 生成配图：\n\n主题：{{TOPIC}}\n风格：{{STYLE}}\n配图位置：{{IMAGE_SLOTS}}\n{{#if FEEDBACK}}\n## 用户修改意见\n\n{{FEEDBACK}}\n\n请结合以上反馈调整配图方案。\n{{/if}}',
         promptArgs: {
           PROMPT: '为网页 PPT 生成配图，风格：{{STYLE}}，主题：{{TOPIC}}',
           SIZE: '1792x1024',
