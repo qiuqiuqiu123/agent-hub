@@ -8,3 +8,5 @@ data/
 response.json
 response.png
 meme-comic-run-*.png
+src-tauri/target/
+src-tauri/gen/

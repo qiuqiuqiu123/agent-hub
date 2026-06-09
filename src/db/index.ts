@@ -106,6 +106,8 @@ CREATE TABLE IF NOT EXISTS pipeline_runs (
   status TEXT NOT NULL DEFAULT 'pending',
   branch TEXT,
   base_sha TEXT,
+  workspace_run_id TEXT,
+  input_json TEXT,
   error TEXT,
   started_at INTEGER NOT NULL,
   completed_at INTEGER,
@@ -156,6 +158,15 @@ CREATE TABLE IF NOT EXISTS webhooks (
   FOREIGN KEY (pipeline_id) REFERENCES pipelines(id) ON DELETE CASCADE
 );
 `)
+
+const runColumns = sqlite.prepare('PRAGMA table_info(pipeline_runs)').all() as Array<{ name: string }>
+const runColumnNames = new Set(runColumns.map(column => column.name))
+if (!runColumnNames.has('workspace_run_id')) {
+  sqlite.exec('ALTER TABLE pipeline_runs ADD COLUMN workspace_run_id TEXT')
+}
+if (!runColumnNames.has('input_json')) {
+  sqlite.exec('ALTER TABLE pipeline_runs ADD COLUMN input_json TEXT')
+}
 
 const stepRunColumns = sqlite.prepare('PRAGMA table_info(pipeline_step_runs)').all() as Array<{ name: string }>
 const stepRunColumnNames = new Set(stepRunColumns.map(column => column.name))

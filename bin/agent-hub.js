@@ -8,6 +8,8 @@ const path = require('path')
 
 const DEFAULT_PORT = 3939
 
+const CLI_COMMANDS = ['pipelines', 'agents', 'schedules', 'runs', 'ps', 'run', 'watch', 'steps']
+
 main().catch(error => {
   console.error(error instanceof Error ? error.message : String(error))
   process.exit(1)
@@ -36,6 +38,12 @@ async function main() {
 
   if (command === 'stop') {
     stopServer(dataDir)
+    return
+  }
+
+  // CLI 查询命令 — 不启动服务器，调用本地 API
+  if (CLI_COMMANDS.includes(command)) {
+    await runCliCommand(command, args, dataDir)
     return
   }
 
@@ -86,21 +94,32 @@ async function main() {
 }
 
 function parseArgs(argv) {
-  const args = { command: 'start', noOpen: false, port: undefined, dataDir: undefined }
+  const args = { command: 'start', noOpen: false, noWatch: false, port: undefined, dataDir: undefined, limit: undefined, pipelineId: undefined, runId: undefined, inputs: [] }
   const list = [...argv]
   if (list.includes('--help') || list.includes('-h')) return { ...args, command: 'help' }
   if (list.includes('--version') || list.includes('-v')) return { ...args, command: 'version' }
   if (list[0] && !list[0].startsWith('-')) {
     args.command = list.shift()
   }
+  // 第二个位置参数作为 target（pipeline-id 或 run-id）
+  if (list[0] && !list[0].startsWith('-')) {
+    const target = list.shift()
+    if (args.command === 'run') args.pipelineId = target
+    else if (args.command === 'watch' || args.command === 'steps') args.runId = target
+  }
 
   for (let i = 0; i < list.length; i++) {
     const arg = list[i]
     if (arg === '--no-open') args.noOpen = true
+    else if (arg === '--no-watch') args.noWatch = true
     else if (arg === '--port') args.port = list[++i]
     else if (arg.startsWith('--port=')) args.port = arg.slice('--port='.length)
     else if (arg === '--data-dir') args.dataDir = list[++i]
     else if (arg.startsWith('--data-dir=')) args.dataDir = arg.slice('--data-dir='.length)
+    else if (arg === '--limit') args.limit = Number(list[++i])
+    else if (arg.startsWith('--limit=')) args.limit = Number(arg.slice('--limit='.length))
+    else if (arg === '--input') args.inputs.push(list[++i])
+    else if (arg.startsWith('--input=')) args.inputs.push(arg.slice('--input='.length))
     else throw new Error(`未知参数: ${arg}`)
   }
   return args
@@ -111,8 +130,19 @@ function printHelp() {
 
 Usage:
   agent-hub [start] [--port 3939] [--data-dir ~/.agent-hub] [--no-open]
-  agent-hub status [--data-dir ~/.agent-hub]
-  agent-hub stop [--data-dir ~/.agent-hub]
+  agent-hub status
+  agent-hub stop
+
+查询命令 (需要服务运行中):
+  agent-hub pipelines              列出所有 pipeline
+  agent-hub agents                 列出所有 agent
+  agent-hub schedules              列出定时任务
+  agent-hub runs [--limit 10]      运行历史
+  agent-hub ps                     当前运行中的任务
+  agent-hub steps <run-id>         查看某次运行各步骤
+  agent-hub run <pipeline-id> [--input KEY=VAL ...] [--no-watch]  触发执行
+  agent-hub watch <run-id>         实时监控运行日志
+
   agent-hub version
 `)
 }
@@ -196,6 +226,20 @@ function isPortAvailable(port) {
     })
     server.listen(port, '127.0.0.1')
   })
+}
+
+async function runCliCommand(command, args, dataDir) {
+  args.dataDir = dataDir
+  switch (command) {
+    case 'pipelines': return require('./cli/commands/pipelines')(args)
+    case 'agents': return require('./cli/commands/agents')(args)
+    case 'schedules': return require('./cli/commands/schedules')(args)
+    case 'runs': return require('./cli/commands/runs').runs(args)
+    case 'ps': return require('./cli/commands/runs').ps(args)
+    case 'run': return require('./cli/commands/run')(args)
+    case 'watch': return require('./cli/commands/watch')(args)
+    case 'steps': return require('./cli/commands/steps')(args)
+  }
 }
 
 function openBrowser(url) {
